@@ -33,6 +33,7 @@
 
 
 static GUID	GUID_DFU = { 0x3fe809ab, 0xfb91, 0x4cb5, { 0xa6, 0x43, 0x69, 0x67, 0x0d, 0x52,0x36,0x6e } };
+static GUID GUID_APP = { 0xcb979912, 0x5029, 0x420a, { 0xae, 0xb1, 0x34, 0xfc, 0x0a, 0x7d,0x57,0x26 } };
 
 CTime startTime ;
 CTime endTime ;
@@ -66,6 +67,7 @@ HANDLE hImage;
 
 
 bool  Verify = false;
+bool  Reset = false;
 bool  Optimize = false;
 char *ptr = NULL;
 char Drive[3], Dir[256], Fname[256], Ext[256];
@@ -127,6 +129,7 @@ void man()
 
 	printf("  -d                   (Download the content of a file into MCU flash) \n");
 	printf("     --v               : verify after download \n");
+	printf("     --r               : reset to application \n");
 	printf("     --o               : optimize; removes FFs data \n");
 	printf("     --fn  file_name   : full path name (.dfu file) \n");
 	fflush(NULL);
@@ -165,6 +168,7 @@ bool Is_SubOption(char* suboption)
     else if (strcmp(suboption,"--al")==0) return true;
 	else if (strcmp(suboption,"--v")==0) return true;
 	else if (strcmp(suboption,"--o")==0) return true;
+	else if (strcmp(suboption, "--r") == 0) return true;
 
 	else return false;
 }
@@ -524,12 +528,57 @@ int LaunchUpload(void)
 
 
 /*******************************************************************************************/
+/* Function    : LaunchReturn													     	   */
+/* IN          : None																	   */
+/* OUT         : Status                                                                    */
+/* Description : Prepare to launch the Return-to-Application Thread				           */
+/*******************************************************************************************/
+
+int LaunchReturn(void)
+{
+	DFUThreadContext Context;
+	DWORD dwRet;
+	HANDLE hImage;
+
+
+	lstrcpy(Context.szDevLink, TmpDev[m_CurrentDevice]);
+	Context.DfuGUID = GUID_DFU;
+	Context.AppGUID = GUID_APP;
+	Context.Operation = OPERATION_RETURN;
+	if (m_BufferedImage)
+		STDFUFILES_DestroyImage(&m_BufferedImage);
+	m_BufferedImage = 0;
+
+	CString Name;
+
+	Name = m_pMapping[TargetSel].Name;
+	STDFUFILES_CreateImageFromMapping(&hImage, m_pMapping + TargetSel);
+	STDFUFILES_SetImageName(hImage, (LPSTR)(LPCSTR)Name);
+	STDFUFILES_FilterImageForOperation(hImage, m_pMapping + TargetSel, OPERATION_RETURN, FALSE);
+	Context.hImage = hImage;
+
+	startTime = CTime::GetCurrentTime();
+
+	dwRet = STDFUPRT_LaunchOperation(&Context, &m_OperationCode);
+	if (dwRet != STDFUPRT_NOERROR)
+	{
+		Context.ErrorCode = dwRet;
+		HandleError(&Context);
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+
+/*******************************************************************************************/
 /* Function    : LaunchUpgrade															   */
 /* IN          : None																	   */
 /* OUT         : Status                                                                    */
 /* Description : Prepare to launch the Upgrade Thread				                       */
 /*******************************************************************************************/
-
 
 int LaunchUpgrade(void) 
 {
@@ -608,7 +657,6 @@ int LaunchUpgrade(void)
 		}
 		else
 		{
-
 			return 0;
 		}
 	}
@@ -1308,9 +1356,14 @@ void CALLBACK TimerProc(HWND hWnd, UINT nMsg, UINT nIDEvent, DWORD dwTime)
 									bAllTargetsFinished=FALSE;
 									LaunchVerify();
 								}*/
-
+								if (Reset) {
+									LaunchReturn();
+								}
+								else
+								{
 									KillTimer(hWnd, nIDEvent);
-									PostQuitMessage (0) ;							 
+									PostQuitMessage (0) ;		
+								}
 
 							}
 						}
@@ -1376,9 +1429,14 @@ void CALLBACK TimerProc(HWND hWnd, UINT nMsg, UINT nIDEvent, DWORD dwTime)
 							}
 							else
 							{ 
-							
-							  	KillTimer(hWnd, nIDEvent);
-									PostQuitMessage (0) ;
+								if (Reset) {
+									LaunchReturn();
+								}
+								else
+								{
+									KillTimer(hWnd, nIDEvent);
+									PostQuitMessage(0);
+								}
 							}
 
 							
@@ -1417,7 +1475,10 @@ void CALLBACK TimerProc(HWND hWnd, UINT nMsg, UINT nIDEvent, DWORD dwTime)
 
 						if ( (Context.Operation==OPERATION_DETACH) || (Context.Operation==OPERATION_RETURN) )
 						{
-					
+
+
+							KillTimer(hWnd, nIDEvent);
+							PostQuitMessage(0);
 							/*Refresh();*/
 						}
 						else
@@ -1672,6 +1733,11 @@ int main(int argc, char* argv[])
 					 if (strcmp(argv[arg_index-1],"--v")==0) 
 					 {
 						 Verify = true;
+						 arg_index--;
+					 }
+					 else if (strcmp(argv[arg_index - 1], "--r") == 0)
+					 {
+						 Reset = true;
 						 arg_index--;
 					 }
 					 else if (strcmp(argv[arg_index-1],"--o")==0) 
